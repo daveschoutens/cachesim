@@ -98,7 +98,7 @@ class Stage:
         self.index = index
         self.x_trigger = int(x_trigger) 
         self.y_offset_dir = y_offset_dir 
-        self.worker_y_base = HIGHWAY_Y + (int(140 * SCALE) * y_offset_dir)
+        self.worker_y_base = HIGHWAY_Y + (int(120 * SCALE) * y_offset_dir)
         
         # SHARED RESOURCES
         self.workers = [BackendWorker() for _ in range(DEFAULT_WORKERS)]
@@ -128,6 +128,11 @@ class Stage:
         
         # Waiting queues are separate per lane to wake up correct ghosts
         self.waiting_for_refresh = {i: collections.defaultdict(list) for i in range(MAX_LANES)}
+
+        # Load History
+        self.load_history = collections.deque(maxlen=100)
+        self.stats_timer = 0
+
 
     def adjust_capacity(self, delta):
         new_len = len(self.workers) + delta
@@ -159,7 +164,12 @@ class Stage:
             self.batch_buffers[i] = []
             self.batch_timers[i] = 0
             self.coalesce_counts[i] = 0
+            self.coalesce_counts[i] = 0
             self.waiting_for_refresh[i] = collections.defaultdict(list)
+            
+        self.load_history.clear()
+        self.stats_timer = 0
+
             
         # Reset Shared State
         self.worker_queue.clear()
@@ -203,6 +213,15 @@ class Stage:
                         
                         # Reset Timer
                         self.batch_timers[lane] = sim_time if len(self.batch_buffers[lane]) > 0 else 0
+
+        # 2a. Load Statistics
+        self.stats_timer += dt
+        if self.stats_timer >= 0.1:
+             self.stats_timer = 0
+             busy = sum(1 for w in self.workers if w.busy_until > sim_time)
+             total = len(self.workers)
+             pct = busy / total if total > 0 else 0
+             self.load_history.append(pct)
 
         # 3. WORKER ASSIGNMENT (Unified & Shared)
         if self.worker_queue:
@@ -447,6 +466,7 @@ def main():
                 if event.key == pygame.K_h: show_help = not show_help
 
                 # --- NAMED SAVE/LOAD (Ctrl+S / Ctrl+L) ---
+                # --- NAMED SAVE/LOAD (Ctrl+S / Ctrl+L) ---
                 if is_ctrl and event.key == pygame.K_s:
                     ui_mode = 'save_menu'
                     input_text = ""
@@ -520,7 +540,7 @@ def main():
                 if event.key == pygame.K_l: 
                     if is_shift: drag_coeff = min(0.100, round(drag_coeff + 0.001, 3))
                     else: compute_speed = min(10.0, round(compute_speed + 0.2, 1))
-                if event.key == pygame.K_s: saturation_enabled = not saturation_enabled
+                if event.key == pygame.K_s and not is_ctrl: saturation_enabled = not saturation_enabled
                 if event.key == pygame.K_r: 
                     requests.clear(); completed_latencies.clear(); 
                     sim_time = 0; spawn_timer = 0;
@@ -963,12 +983,14 @@ def main():
             if not stage.cache_enabled: status_parts.append("[NO CACHE]")
             else:
                 status_parts.append(f"T:{stage.ttl}s")
+                # status_parts.append(f"W:{stage.work_time}s") # Moved to own line
                 if stage.refresh_enabled: status_parts.append(f"R:{stage.refresh_time}s")
                 if stage.coalesce_enabled: status_parts.append("[C]")
                 if stage.jitter > 0: status_parts.append(f"J:{stage.jitter}s")
             
             status_parts.append(f"L2:{'ON' if stage.l2_enabled else 'OFF'}")
             status_str = " ".join(status_parts)
+            work_str = f"Lat: {stage.work_time}s"
             
             if stage.batch_enabled:
                 batch_str = f"B: {stage.batch_max_size} / {stage.batch_window}s"
@@ -980,12 +1002,13 @@ def main():
             color = HIGHLIGHT if is_active else DOT_GRAY
             # Increased vertical offset to 190 to clear adjacent blades
             # Label goes ABOVE Lane 0
-            label_y = HIGHWAY_Y - int(130 * SCALE)
+            label_y = HIGHWAY_Y - int(150 * SCALE)
             
             # Shift text left (-60) to center it better
             screen.blit(fonts['title'].render(f"Stage {i+1}", True, color), (stage.x_trigger - int(60*SCALE), label_y))
-            screen.blit(fonts['std'].render(status_str, True, color), (stage.x_trigger - int(60*SCALE), label_y + int(25*SCALE)))
-            screen.blit(fonts['std'].render(batch_str, True, batch_color), (stage.x_trigger - int(60*SCALE), label_y + int(45*SCALE)))
+            screen.blit(fonts['std'].render(work_str, True, color), (stage.x_trigger - int(60*SCALE), label_y + int(20*SCALE)))
+            screen.blit(fonts['std'].render(status_str, True, color), (stage.x_trigger - int(60*SCALE), label_y + int(40*SCALE)))
+            screen.blit(fonts['std'].render(batch_str, True, batch_color), (stage.x_trigger - int(60*SCALE), label_y + int(60*SCALE)))
 
             # Draw Connection Lines (Lane 0 Down, Lane 1 Up)
             pygame.draw.line(screen, (40, 40, 50), (stage.x_trigger, HIGHWAY_Y), (stage.x_trigger, stage.worker_y_base), 2)
@@ -1017,13 +1040,42 @@ def main():
                 by = rack_y + int(5*SCALE) + (row * int(ROW_V_SPACING*SCALE))
                 pygame.draw.rect(screen, blade_color, (bx, by, BLADE_W, BLADE_H), border_radius=2)
 
-            # --- LOAD GAUGE & LABELS (Bottom of Rack) ---
-            gauge_y = rack_y + rack_h + int(5*SCALE)
-            pygame.draw.rect(screen, (30, 30, 30), (rack_x - 5, gauge_y, rack_w+10, int(6*SCALE)))
-            fill_color = GREEN if load_pct < 0.5 else (ORANGE if load_pct < 0.8 else RED)
-            pygame.draw.rect(screen, fill_color, (rack_x - 5, gauge_y, (rack_w+10) * load_pct, int(6*SCALE)))
-            metric_str = f"Load:{int(load_pct*100)}% Lat:{stage.work_time:.1f}s"
-            screen.blit(fonts['tiny'].render(metric_str, True, DOT_GRAY, BG_COLOR), (rack_x, gauge_y + int(8*SCALE)))
+            # --- LOAD TIMELINE GRAPH ---
+            graph_h = int(25*SCALE)
+            graph_y = rack_y + rack_h + int(5*SCALE)
+            graph_rect = (rack_x - 5, graph_y, rack_w + 10, graph_h)
+            
+            # Background
+            pygame.draw.rect(screen, (20, 20, 25), graph_rect)
+            pygame.draw.rect(screen, (60, 60, 70), graph_rect, 1)
+
+            # Plot History
+            if len(stage.load_history) > 1:
+                pts = []
+                w_step = (rack_w + 10) / 100 # Max history len
+                for h_idx, val in enumerate(stage.load_history):
+                    lx = (rack_x - 5) + (h_idx * w_step)
+                    ly = graph_y + graph_h - (val * graph_h)
+                    pts.append((lx, ly))
+                
+                # Close the polygon for fill
+                poly_pts = [(rack_x - 5, graph_y + graph_h)] + pts + [(pts[-1][0], graph_y + graph_h)]
+                
+                # Color based on current load (or avg?) - Use current for consistent flair
+                graph_color = GREEN if load_pct < 0.5 else (ORANGE if load_pct < 0.8 else RED)
+                # Draw Fill (with transparency if possible? No, standard pygame is easier opaque)
+                pygame.draw.polygon(screen, graph_color, poly_pts)
+                # Draw Line
+                pygame.draw.lines(screen, WHITE, False, pts, 1)
+
+            # Current Level Indicator (Right Side Bar)
+            bar_bh = int(load_pct * graph_h)
+            pygame.draw.rect(screen, WHITE, (rack_x + rack_w + 2, graph_y + graph_h - bar_bh, int(3*SCALE), bar_bh))
+
+            # Stats Label
+            avg_load = sum(stage.load_history)/len(stage.load_history) if stage.load_history else 0.0
+            metric_str = f"Load:{int(load_pct*100)}% Avg:{int(avg_load*100)}%"
+            screen.blit(fonts['tiny'].render(metric_str, True, DOT_GRAY, BG_COLOR), (rack_x, graph_y + graph_h + int(2*SCALE)))
 
             # --- PER-LANE INFRASTRUCTURE LOOP ---
             for lane in range(active_lane_count):
@@ -1174,7 +1226,7 @@ def main():
         # --- DRAW HELP PANEL ---
         if show_help:
             p_w = int(520*SCALE)
-            p_h = int(440*SCALE)
+            p_h = int(520*SCALE)
             p_x = int(30*SCALE)
             p_y = int(60*SCALE)
             s = pygame.Surface((p_w, p_h), pygame.SRCALPHA)
@@ -1202,6 +1254,8 @@ def main():
             draw_row("Batch Size / Window", ["-", "="], int(310*SCALE))
             draw_row("TTL / Refresh", ["6", "7"], int(350*SCALE))
             draw_row("Usable Keyspace", ["9", "0"], int(390*SCALE))
+            draw_row("Save / Load (Menu)", ["^S", "^L"], int(430*SCALE))
+            draw_row("Snapshot (Quick)", ["F5", "F6"], int(470*SCALE))
 
         else:
              screen.blit(fonts['std'].render("[H] Controls", True, MUTED), (int(30*SCALE), int(80*SCALE)))
