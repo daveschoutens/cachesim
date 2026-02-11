@@ -1,9 +1,10 @@
 import pygame
 import random
 import collections
-import math
+
 import pickle
 import os
+from typing import List, Dict, Optional, Deque, Any, Tuple, cast
 
 # --- MASTER SCALING FACTOR ---
 SCALE = 1
@@ -24,6 +25,7 @@ BLADE_H = int(20 * SCALE)
 RACK_PAD = int(40 * SCALE)
 
 BG_COLOR = (20, 20, 30)
+BLACK = (0, 0, 0)
 ROAD_COLOR = (50, 50, 60)
 DOT_GRAY = (150, 150, 150)
 RED = (231, 76, 60)       
@@ -36,6 +38,7 @@ YELLOW = (241, 196, 15)
 TEXT_WHITE = (220, 220, 220)
 HIGHLIGHT = (241, 196, 15) # The "Active" Color
 MUTED = (100, 100, 100)
+DIM_GRAY = (105, 105, 105)
 DARK_SERVER = (40, 40, 50)
 PEN_COLOR = (60, 60, 70)
 WHITE = (255, 255, 255)
@@ -62,7 +65,7 @@ class Request:
         self.is_leader = False
         self.is_tracer = is_tracer
         self.is_bust = is_bust # Surgical Cache Bust
-        self.stage_idx_ref = None 
+        self.stage_idx_ref: Optional['Stage'] = None # Forward reference to Stage class 
         
         if is_ghost:
             self.state = 'diverting' 
@@ -101,9 +104,9 @@ class Stage:
         self.worker_y_base = HIGHWAY_Y + (int(120 * SCALE) * y_offset_dir)
         
         # SHARED RESOURCES
-        self.workers = [BackendWorker() for _ in range(DEFAULT_WORKERS)]
-        self.worker_queue = collections.deque() # Unified Queue (Always contains Lists of Reqs)
-        self.l2_cache = {} # Key -> Expiry (SHARED)
+        self.workers: List[BackendWorker] = [BackendWorker() for _ in range(DEFAULT_WORKERS)]
+        self.worker_queue: Deque[List[Request]] = collections.deque() # Unified Queue (Always contains Lists of Reqs)
+        self.l2_cache: Dict[int, float] = {} # Key -> Expiry (SHARED)
         
         # CONFIG
         self.work_time = DEFAULT_WORK_TIME 
@@ -119,15 +122,15 @@ class Stage:
         self.jitter = 0.0 # Random variation in TTLs (Seconds)
 
         # PER-LANE RESOURCES (Split State)
-        self.l1_caches = {i: {} for i in range(MAX_LANES)}
-        self.refresh_active = {i: {} for i in range(MAX_LANES)}
-        self.leaders_inflight = {i: {} for i in range(MAX_LANES)}
-        self.batch_buffers = {i: [] for i in range(MAX_LANES)}
-        self.batch_timers = {i: 0 for i in range(MAX_LANES)}
-        self.coalesce_counts = {i: 0 for i in range(MAX_LANES)}
+        self.l1_caches: Dict[int, Dict[int, float]] = {i: {} for i in range(MAX_LANES)}
+        self.refresh_active: Dict[int, Dict[int, bool]] = {i: {} for i in range(MAX_LANES)}
+        self.leaders_inflight: Dict[int, Dict[int, bool]] = {i: {} for i in range(MAX_LANES)}
+        self.batch_buffers: Dict[int, List[Request]] = {i: [] for i in range(MAX_LANES)}
+        self.batch_timers: Dict[int, float] = {i: 0 for i in range(MAX_LANES)}
+        self.coalesce_counts: Dict[int, int] = {i: 0 for i in range(MAX_LANES)}
         
         # Waiting queues are separate per lane to wake up correct ghosts
-        self.waiting_for_refresh = {i: collections.defaultdict(list) for i in range(MAX_LANES)}
+        self.waiting_for_refresh: Dict[int, Dict[int, List[Request]]] = {i: cast(Dict[int, List[Request]], collections.defaultdict(list)) for i in range(MAX_LANES)}
 
         # Load History
         self.load_history = collections.deque(maxlen=100)
@@ -164,8 +167,8 @@ class Stage:
             self.batch_buffers[i] = []
             self.batch_timers[i] = 0
             self.coalesce_counts[i] = 0
-            self.coalesce_counts[i] = 0
-            self.waiting_for_refresh[i] = collections.defaultdict(list)
+
+            self.waiting_for_refresh[i] = cast(Dict[int, List[Request]], collections.defaultdict(list))
             
         self.load_history.clear()
         self.stats_timer = 0
@@ -192,7 +195,7 @@ class Stage:
             for key in list(self.refresh_active[lane].keys()):
                  cache = self.l1_caches[lane]
                  if sim_time > cache.get(key, 0) + (self.ttl * 2):
-                    del self.refresh_active[lane][key]
+                    self.refresh_active[lane].pop(key, None)
 
             # 2. Batch Lifecycle
             if self.batch_enabled:
@@ -204,8 +207,8 @@ class Stage:
                     if time_trigger or size_trigger:
                         # Seal the batch
                         batch_size = min(len(buffer), self.batch_max_size)
-                        sealed_batch = buffer[:batch_size]
-                        self.batch_buffers[lane] = buffer[batch_size:]
+                        sealed_batch = list(buffer)[:batch_size] # type: ignore
+                        self.batch_buffers[lane] = list(buffer)[batch_size:] # type: ignore
                         
                         # Add to SHARED Worker Queue
                         self.worker_queue.append(sealed_batch)
@@ -237,14 +240,24 @@ class Stage:
                 for r in unit_of_work: r.state = 'processing'
 
 
-def get_fonts():
+def get_fonts() -> Dict[str, Any]:
     return {
-        'std': pygame.font.SysFont("Consolas", int(14 * SCALE)),
-        'title': pygame.font.SysFont("Arial", int(18 * SCALE), bold=True),
-        'big': pygame.font.SysFont("Arial", int(24 * SCALE), bold=True),
-        'tiny': pygame.font.SysFont("Arial", int(10 * SCALE), bold=True),
-        'key': pygame.font.SysFont("Arial", int(12 * SCALE), bold=True),
+        'title': pygame.font.SysFont("Arial", int(24*SCALE), bold=True),
+        'std': pygame.font.SysFont("Consolas", int(14*SCALE), bold=False),
+        'key': pygame.font.SysFont("Arial", int(12*SCALE), bold=True),
+        'small': pygame.font.SysFont("Consolas", int(10*SCALE), bold=False),
+        'tiny': pygame.font.SysFont("Arial", int(10*SCALE), bold=True),
+        'mono': pygame.font.SysFont("Consolas", int(12*SCALE), bold=True), 
+        'blob': pygame.font.SysFont("Arial", int(20*SCALE), bold=True),
+        'big': pygame.font.SysFont("Arial", int(24*SCALE), bold=True),
     }
+
+def draw_text(surface: Any, font: Any, text: str, color: Tuple[int, int, int], pos: Tuple[int, int], align: str = 'topleft') -> None:
+    # Helper to handle text rendering and blitting with alignment
+    surf = font.render(text, True, color)
+    rect = surf.get_rect()
+    setattr(rect, align, pos)
+    surface.blit(surf, rect)
 
 def draw_shape(surface, color, x, y, shape_id, radius, width=0):
     shape_id = shape_id % 7 # Safety wrap
@@ -297,12 +310,14 @@ def draw_histogram(screen, latencies, fonts):
     p95 = data_list[int(count * 0.95)]
     max_observed = data_list[-1]
     
-    current_graph_max = max(INITIAL_MAX_LATENCY, max_observed * 1.1)
+    current_graph_max = max(INITIAL_MAX_LATENCY, float(max_observed) * 1.1)
 
     stats_text = f"N:{count} | Min:{min_lat:.2f}s | Avg:{avg_lat:.2f}s | P50:{p50:.2f}s | P95:{p95:.2f}s | Max:{max_observed:.2f}s"
-    screen.blit(fonts['std'].render(stats_text, True, TEXT_WHITE), (int(60*SCALE), HIST_Y + int(10*SCALE)))
-    screen.blit(fonts['std'].render(f"{MIN_LATENCY}s", True, MUTED), (int(50*SCALE), HIST_Y + HIST_HEIGHT + 5))
-    screen.blit(fonts['std'].render(f"{current_graph_max:.1f}s", True, MUTED), (SCREEN_WIDTH - int(120*SCALE), HIST_Y + HIST_HEIGHT + 5))
+    draw_text(screen, fonts['std'], stats_text, TEXT_WHITE, (int(60*SCALE), HIST_Y + int(10*SCALE)))
+    
+    # Draw Graph
+    draw_text(screen, fonts['std'], f"{MIN_LATENCY}s", MUTED, (int(50*SCALE), HIST_Y + HIST_HEIGHT + 5))
+    draw_text(screen, fonts['std'], f"{current_graph_max:.1f}s", MUTED, (SCREEN_WIDTH - int(120*SCALE), HIST_Y + HIST_HEIGHT + 5))
 
     bar_width = max(2, int(6 * SCALE))
     graph_width = SCREEN_WIDTH - int(120*SCALE)
@@ -350,21 +365,28 @@ def main():
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
     pygame.display.set_caption(f"Cache Sim: Polished UI (x{SCALE})")
     clock = pygame.time.Clock()
-    fonts = get_fonts()
+    fonts: Dict[str, Any] = get_fonts()
 
     num_stages = 1
-    def create_stages(n):
+    def create_stages(n: int, current: Optional[List[Stage]] = None) -> List[Stage]:
         new_stages = []
         spacing = SCREEN_WIDTH / (n + 1)
         for i in range(n):
-            direction = 1 # Force consistent direction (Below Highway)
-            x_pos = spacing * (i + 1)
-            new_stages.append(Stage(i, x_pos, direction))
+            # Reuse existing stage if available
+            if current and i < len(current):
+                stage = current[i]
+                # Update position for new layout
+                stage.x_trigger = spacing * (i + 1)
+                new_stages.append(stage)
+            else:
+                direction = 1 # Force consistent direction (Below Highway)
+                x_pos = spacing * (i + 1)
+                new_stages.append(Stage(i, x_pos, direction))
         return new_stages
 
-    stages = create_stages(num_stages)
+    stages: List[Stage] = create_stages(num_stages)
     active_stage_idx = 0
-    requests = []
+    requests: List[Request] = []
     completed_latencies = collections.deque(maxlen=200) 
     
     current_rps = DEFAULT_RPS
@@ -447,7 +469,7 @@ def main():
                             fname = file_list[selected_file_idx]
                             path = os.path.join("saved_states", fname)
                             success, state, msg = load_simulation(path)
-                            if success:
+                            if success and state is not None:
                                 stages = state['stages']; requests = state['requests']
                                 completed_latencies = state['latencies']; sim_time = state['sim_time']
                                 current_rps = state['rps']; active_key_limit = state['key_limit']
@@ -503,7 +525,7 @@ def main():
                     # Quickload
                     if os.path.exists("sim_state.pkl"):
                         success, state, msg = load_simulation("sim_state.pkl")
-                        if success:
+                        if success and state is not None:
                             stages = state['stages']; requests = state['requests']
                             completed_latencies = state['latencies']; sim_time = state['sim_time']
                             current_rps = state['rps']; active_key_limit = state['key_limit']
@@ -523,23 +545,23 @@ def main():
 
                 if event.key == pygame.K_F1: 
                     if num_stages > 1:
-                        num_stages -= 1; stages = create_stages(num_stages)
+                        num_stages -= 1; stages = create_stages(num_stages, stages)
                         requests.clear(); completed_latencies.clear(); sim_time = 0; active_stage_idx = 0
                 if event.key == pygame.K_F2:
                     if num_stages < MAX_STAGES:
-                        num_stages += 1; stages = create_stages(num_stages)
+                        num_stages += 1; stages = create_stages(num_stages, stages)
                         requests.clear(); completed_latencies.clear(); sim_time = 0; active_stage_idx = 0
                 if event.key == pygame.K_SPACE: paused = not paused
                 if event.key == pygame.K_UP: current_rps += 2
                 if event.key == pygame.K_DOWN: current_rps = max(0, current_rps - 2)
-                if event.key == pygame.K_LEFT: sim_speed = max(0.1, round(sim_speed - 0.1, 1))
-                if event.key == pygame.K_RIGHT: sim_speed = min(5.0, round(sim_speed + 0.1, 1))
+                if event.key == pygame.K_LEFT: sim_speed = max(0.1, round(float(sim_speed - 0.1), 1)) # pyre-ignore[6]
+                if event.key == pygame.K_RIGHT: sim_speed = min(5.0, round(float(sim_speed + 0.1), 1)) # pyre-ignore[6]
                 if event.key == pygame.K_k: 
-                    if is_shift: drag_coeff = max(0.001, round(drag_coeff - 0.001, 3))
-                    else: compute_speed = max(0.2, round(compute_speed - 0.2, 1))
+                    if is_shift: drag_coeff = max(0.001, round(float(drag_coeff - 0.001), 3)) # pyre-ignore[6]
+                    else: compute_speed = max(0.2, round(float(compute_speed - 0.2), 1)) # pyre-ignore[6]
                 if event.key == pygame.K_l: 
-                    if is_shift: drag_coeff = min(0.100, round(drag_coeff + 0.001, 3))
-                    else: compute_speed = min(10.0, round(compute_speed + 0.2, 1))
+                    if is_shift: drag_coeff = min(0.100, round(float(drag_coeff + 0.001), 3)) # pyre-ignore[6]
+                    else: compute_speed = min(10.0, round(float(compute_speed + 0.2), 1)) # pyre-ignore[6]
                 if event.key == pygame.K_s and not is_ctrl: saturation_enabled = not saturation_enabled
                 if event.key == pygame.K_r: 
                     requests.clear(); completed_latencies.clear(); 
@@ -548,7 +570,7 @@ def main():
                 if event.key == pygame.K_x: completed_latencies.clear()
 
                 # --- STAGE CONTROLS ---
-                curr = stages[active_stage_idx]
+                curr: Stage = stages[active_stage_idx]
                 if event.key == pygame.K_TAB:
                     if is_shift: active_stage_idx = (active_stage_idx - 1) % num_stages
                     else: active_stage_idx = (active_stage_idx + 1) % num_stages
@@ -576,18 +598,18 @@ def main():
 
                 # --- CAPACITY / LATENCY GROUP ([ ]) ---
                 if event.key == pygame.K_LEFTBRACKET:
-                    if is_shift: curr.work_time = max(0.1, round(curr.work_time - 0.1, 1))
+                    if is_shift: curr.work_time = max(0.1, round(float(curr.work_time - 0.1), 1)) # pyre-ignore[6]
                     else: curr.adjust_capacity(-1)
                 if event.key == pygame.K_RIGHTBRACKET:
-                    if is_shift: curr.work_time = round(curr.work_time + 0.1, 1)
+                    if is_shift: curr.work_time = round(float(curr.work_time + 0.1), 1) # pyre-ignore[6]
                     else: curr.adjust_capacity(1)
 
                 # --- BATCH GROUP (- =) ---
                 if event.key == pygame.K_MINUS:
-                    if is_shift: curr.batch_window = max(0.0, round(curr.batch_window - 0.1, 1))
+                    if is_shift: curr.batch_window = max(0.0, round(float(curr.batch_window - 0.1), 1)) # pyre-ignore[6]
                     else: curr.batch_max_size = max(1, curr.batch_max_size - 1)
                 if event.key == pygame.K_EQUALS:
-                    if is_shift: curr.batch_window = round(curr.batch_window + 0.1, 1)
+                    if is_shift: curr.batch_window = round(float(curr.batch_window + 0.1), 1) # pyre-ignore[6]
                     else: curr.batch_max_size += 1
 
                 # --- KEYSPACE CONTROL (9 0) ---
@@ -596,11 +618,11 @@ def main():
 
                 # --- TTL / REFRESH GROUP (6 7) ---
                 if event.key == pygame.K_6:
-                    if is_shift: curr.refresh_time = max(0.1, round(curr.refresh_time - 0.1, 1))
-                    else: curr.ttl = max(0.5, round(curr.ttl - 0.5, 1))
+                    if is_shift: curr.refresh_time = max(0.1, round(float(curr.refresh_time - 0.1), 1)) # pyre-ignore[6]
+                    else: curr.ttl = max(0.5, round(float(curr.ttl - 0.5), 1)) # pyre-ignore[6]
                 if event.key == pygame.K_7:
-                    if is_shift: curr.refresh_time = round(curr.refresh_time + 0.1, 1)
-                    else: curr.ttl = round(curr.ttl + 0.5, 1)
+                    if is_shift: curr.refresh_time = round(float(curr.refresh_time + 0.1), 1) # pyre-ignore[6]
+                    else: curr.ttl = round(float(curr.ttl + 0.5), 1) # pyre-ignore[6]
                 curr.refresh_time = min(curr.refresh_time, curr.ttl)
 
             elif event.type == pygame.MOUSEBUTTONDOWN:
@@ -933,20 +955,20 @@ def main():
         if active_lane_count > 1:
             pygame.draw.rect(screen, ROAD_COLOR, (0, HIGHWAY_Y + LANE_SPACING - int(25*SCALE), SCREEN_WIDTH, int(50*SCALE)))
         
-        screen.blit(fonts['big'].render(f"Load: {current_rps} Req/s", True, TEXT_WHITE), (int(30*SCALE), int(20*SCALE)))
+        draw_text(screen, fonts['big'], f"Load: {current_rps} Req/s", TEXT_WHITE, (int(30*SCALE), int(20*SCALE)))
         spd_color = GREEN if sim_speed == 1.0 else (ORANGE if paused else RED)
-        screen.blit(fonts['big'].render(f"Sim Spd: {sim_speed:.1f}x", True, spd_color), (int(240*SCALE), int(20*SCALE)))
+        draw_text(screen, fonts['big'], f"Sim Spd: {sim_speed:.1f}x", spd_color, (int(240*SCALE), int(20*SCALE)))
         c_color = GREEN if compute_speed == 1.0 else ORANGE
-        screen.blit(fonts['big'].render(f"Comp Spd: {compute_speed:.1f}x", True, c_color), (int(450*SCALE), int(20*SCALE)))
+        draw_text(screen, fonts['big'], f"Comp Spd: {compute_speed:.1f}x", c_color, (int(450*SCALE), int(20*SCALE)))
 
         # Saturation Indicator
         sat_color = RED if saturation_enabled else DOT_GRAY
         sat_text = f"Drag: {int((drag_factor-1.0)*100)}% (Sev:{drag_coeff:.3f})" if saturation_enabled else "Drag: OFF"
-        screen.blit(fonts['big'].render(sat_text, True, sat_color), (int(680*SCALE), int(20*SCALE)))
+        draw_text(screen, fonts['big'], sat_text, sat_color, (int(680*SCALE), int(20*SCALE)))
 
         # --- DRAW KEYSPACE ---
         keyspace_y = HIST_Y - int(80*SCALE)
-        screen.blit(fonts['tiny'].render(f"KEYSPACE", True, MUTED), (int(50*SCALE), keyspace_y))
+        draw_text(screen, fonts['tiny'], "KEYSPACE", MUTED, (int(50*SCALE), keyspace_y))
         for k in range(KEYS_PER_STAGE):
             draw_shape(screen, DOT_GRAY, int(50*SCALE) + (k*30), keyspace_y + int(20*SCALE), k, 6)
 
@@ -983,7 +1005,7 @@ def main():
             if not stage.cache_enabled: status_parts.append("[NO CACHE]")
             else:
                 status_parts.append(f"T:{stage.ttl}s")
-                # status_parts.append(f"W:{stage.work_time}s") # Moved to own line
+
                 if stage.refresh_enabled: status_parts.append(f"R:{stage.refresh_time}s")
                 if stage.coalesce_enabled: status_parts.append("[C]")
                 if stage.jitter > 0: status_parts.append(f"J:{stage.jitter}s")
@@ -1006,9 +1028,9 @@ def main():
             
             # Shift text left (-60) to center it better
             screen.blit(fonts['title'].render(f"Stage {i+1}", True, color), (stage.x_trigger - int(60*SCALE), label_y))
-            screen.blit(fonts['std'].render(work_str, True, color), (stage.x_trigger - int(60*SCALE), label_y + int(20*SCALE)))
-            screen.blit(fonts['std'].render(status_str, True, color), (stage.x_trigger - int(60*SCALE), label_y + int(40*SCALE)))
-            screen.blit(fonts['std'].render(batch_str, True, batch_color), (stage.x_trigger - int(60*SCALE), label_y + int(60*SCALE)))
+            draw_text(screen, fonts['std'], work_str, color, (stage.x_trigger - int(60*SCALE), label_y + int(30*SCALE)))
+            draw_text(screen, fonts['std'], status_str, color, (stage.x_trigger - int(60*SCALE), label_y + int(50*SCALE)))
+            draw_text(screen, fonts['std'], batch_str, batch_color, (stage.x_trigger - int(60*SCALE), label_y + int(70*SCALE)))
 
             # Draw Connection Lines (Lane 0 Down, Lane 1 Up)
             pygame.draw.line(screen, (40, 40, 50), (stage.x_trigger, HIGHWAY_Y), (stage.x_trigger, stage.worker_y_base), 2)
@@ -1143,7 +1165,7 @@ def main():
                 pen_x = stage.x_trigger - int(110 * SCALE)
                 pen_h = int(40 * SCALE) 
                 pygame.draw.rect(screen, pen_border_color, (pen_x, pen_y, int(40*SCALE), pen_h), 2)
-                screen.blit(fonts['tiny'].render(f"P{lane}", True, MUTED, BG_COLOR), (pen_x+5, pen_y-12))
+                draw_text(screen, fonts['tiny'], "Pen", MUTED, (pen_x+5, pen_y-12))
 
                 # WORKER QUEUE (Relative to Pen)
                 # Only draw Worker Queue for Lane 0 (it represents the shared queue)
@@ -1234,21 +1256,22 @@ def main():
             screen.blit(s, (p_x, p_y))
             
             def draw_row(label, keys_str, y_off):
-                screen.blit(fonts['std'].render(label, True, TEXT_WHITE), (p_x + int(20*SCALE), p_y + y_off))
+                draw_text(screen, fonts['std'], label, TEXT_WHITE, (p_x + int(20*SCALE), p_y + y_off))
                 x_cursor = p_x + int(250*SCALE)
                 for k in keys_str:
                     x_cursor = draw_key_glyph(screen, fonts, k, x_cursor, p_y + y_off - 5)
 
-            screen.blit(fonts['title'].render("CONTROLS (Press H to Hide)", True, HIGHLIGHT), (p_x + int(20*SCALE), p_y + int(20*SCALE)))
+            draw_text(screen, fonts['title'], "CONTROLS (Press H to Hide)", HIGHLIGHT, (p_x + int(20*SCALE), p_y + int(20*SCALE)))
             
             draw_row("Global Load / Speed", ["UP", "DN", "LF", "RT"], int(60*SCALE))
+
             draw_row("Comp (Shft:Drag) / Sat", ["K", "L", "S"], int(100*SCALE))
             draw_row("Stage / Reset / Hist", ["TAB", "R", "X"], int(140*SCALE))
             draw_row("Toggle Features", ["1", "2", "3", "4", "5", "J"], int(180*SCALE))
             
             pygame.draw.line(screen, DOT_GRAY, (p_x+20, p_y+int(220*SCALE)), (p_x+p_w-20, p_y+int(220*SCALE)), 1)
             
-            screen.blit(fonts['std'].render("Stage Tuning (Hold SHIFT for Time)", True, YELLOW), (p_x + int(20*SCALE), p_y + int(240*SCALE)))
+            draw_text(screen, fonts['std'], "Stage Tuning (Hold SHIFT for Time)", YELLOW, (p_x + int(20*SCALE), p_y + int(240*SCALE)))
             
             draw_row("Workers / Latency", ["[", "]"], int(270*SCALE))
             draw_row("Batch Size / Window", ["-", "="], int(310*SCALE))
@@ -1262,17 +1285,24 @@ def main():
 
         # --- MODAL OVERLAYS ---
         if ui_mode == 'save_menu':
-            # Draw Box
-            box_w, box_h = int(400*SCALE), int(100*SCALE)
+            # Draw Modal Overlay
+            s = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
+            s.fill((0, 0, 0, 180))
+            screen.blit(s, (0, 0))
+            
+            box_w, box_h = int(400*SCALE), int(150*SCALE)
             box_x, box_y = (SCREEN_WIDTH - box_w)//2, (SCREEN_HEIGHT - box_h)//2
-            pygame.draw.rect(screen, (40, 40, 50), (box_x, box_y, box_w, box_h), border_radius=10)
-            pygame.draw.rect(screen, HIGHLIGHT, (box_x, box_y, box_w, box_h), 2, border_radius=10)
+            pygame.draw.rect(screen, PANEL_BG, (box_x, box_y, box_w, box_h))
+            pygame.draw.rect(screen, HIGHLIGHT, (box_x, box_y, box_w, box_h), 2)
             
-            screen.blit(fonts['title'].render("SAVE STATE AS...", True, YELLOW), (box_x + 20, box_y + 20))
+            draw_text(screen, fonts['title'], "SAVE SIMULATION", TEXT_WHITE, (box_x + 20, box_y + 20))
+            draw_text(screen, fonts['std'], "Filename:", TEXT_WHITE, (box_x + 20, box_y + 60))
             
-            # Draw Input Field
-            pygame.draw.rect(screen, (20, 20, 30), (box_x + 20, box_y + 80, box_w - 40, 30))
-            screen.blit(fonts['std'].render(input_text + "_", True, WHITE), (box_x + 25, box_y + 85))
+            # Input Box
+            pygame.draw.rect(screen, BLACK, (box_x + 100, box_y + 55, box_w - 120, 30))
+            draw_text(screen, fonts['std'], input_text + "|", TEXT_WHITE, (box_x + 105, box_y + 60))
+            
+            draw_text(screen, fonts['small'], "Press ENTER to Save, ESC to Cancel", DIM_GRAY, (box_x + 20, box_y + 110))
 
         if ui_mode == 'load_menu':
              # Draw Box
@@ -1281,18 +1311,18 @@ def main():
             pygame.draw.rect(screen, (40, 40, 50), (box_x, box_y, box_w, box_h), border_radius=10)
             pygame.draw.rect(screen, HIGHLIGHT, (box_x, box_y, box_w, box_h), 2, border_radius=10)
             
-            screen.blit(fonts['title'].render("LOAD STATE", True, YELLOW), (box_x + 20, box_y + 20))
+            draw_text(screen, fonts['title'], "LOAD STATE", YELLOW, (box_x + 20, box_y + 20))
             
             # Draw File List
             list_y = box_y + 80
             for i, fname in enumerate(file_list):
                 color = HIGHLIGHT if i == selected_file_idx else DOT_GRAY
                 if list_y < box_y + box_h - 30:
-                    screen.blit(fonts['std'].render(fname, True, color), (box_x + 30, list_y))
+                    draw_text(screen, fonts['std'], fname, color, (box_x + 30, list_y))
                     list_y += int(20*SCALE)
             
             if not file_list:
-                screen.blit(fonts['std'].render("(No saves found)", True, MUTED), (box_x + 30, list_y))
+                draw_text(screen, fonts['std'], "(No saves found)", MUTED, (box_x + 30, list_y))
 
         # --- FLASH MESSAGE ---
         if flash_msg:
