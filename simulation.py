@@ -99,6 +99,8 @@ class Simulation:
                 if 'ttl' in cmd: s.ttl = float(cmd['ttl'])
                 if 'work_time' in cmd: s.work_time = float(cmd['work_time'])
                 if 'jitter' in cmd: s.jitter = float(cmd['jitter'])
+                if 'cache_enabled' in cmd: s.cache_enabled = bool(cmd['cache_enabled'])
+                if 'refresh_enabled' in cmd: s.refresh_enabled = bool(cmd['refresh_enabled'])
                 if 'l2_enabled' in cmd: s.l2_enabled = bool(cmd['l2_enabled'])
                 if 'batch_enabled' in cmd: s.batch_enabled = bool(cmd['batch_enabled'])
                 if 'batch_window' in cmd: s.batch_window = float(cmd['batch_window'])
@@ -124,6 +126,8 @@ class Simulation:
         elif action == 'set_global':
             if 'drag' in cmd: self.drag_coeff = float(cmd['drag'])
             if 'compute_speed' in cmd: self.compute_speed = float(cmd['compute_speed'])
+        elif action == 'reset':
+             self.reset()
 
     def update(self, raw_dt):
         if self.paused: dt = 0

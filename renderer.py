@@ -37,7 +37,13 @@ def draw_shape(surface, color, x, y, shape_id, radius, width=0):
     elif shape_id == 6:
         pygame.draw.polygon(surface, color, [(x-radius, y-radius), (x+radius, y-radius), (x, y+radius)], width)
 
-def draw_key_glyph(surface, fonts, text, x, y, width=int(30*SCALE)):
+def draw_key_glyph(surface, fonts, text, x, y, width=0):
+    if width == 0: width = int(30*SCALE)
+    
+    # Auto-expand
+    w, h = fonts['key'].size(text)
+    if w > width - int(10*SCALE): width = w + int(10*SCALE)
+
     height = int(30*SCALE)
     pygame.draw.rect(surface, (60, 60, 70), (x, y, width, height), border_radius=5)
     pygame.draw.rect(surface, (100, 100, 110), (x, y, width, height), 2, border_radius=5)
@@ -408,7 +414,7 @@ def draw_sim(screen, sim, fonts, show_help, ui_mode, input_text, file_list, sele
     # --- DRAW HELP PANEL ---
     if show_help:
         p_w = int(520*SCALE)
-        p_h = int(520*SCALE)
+        p_h = int(550*SCALE)
         p_x = int(30*SCALE)
         p_y = int(60*SCALE)
         s = pygame.Surface((p_w, p_h), pygame.SRCALPHA)
@@ -425,20 +431,21 @@ def draw_sim(screen, sim, fonts, show_help, ui_mode, input_text, file_list, sele
         
         draw_row("Global Load / Speed", ["UP", "DN", "LF", "RT"], int(60*SCALE))
 
-        draw_row("Comp (Shft:Drag) / Sat", ["K", "L", "S"], int(100*SCALE))
-        draw_row("Stage / Reset / Hist", ["TAB", "R", "X"], int(140*SCALE))
+        draw_row("Comp / Sat / Lane", ["K", "L", "S", "Shift+D"], int(100*SCALE))
+        draw_row("Stage (Sel / + / -)", ["TAB", "A", "Z"], int(140*SCALE))
         draw_row("Toggle Features", ["1", "2", "3", "4", "5", "J"], int(180*SCALE))
+        draw_row("Reset / Hist / Quit", ["R", "X", "Q"], int(220*SCALE))
         
-        pygame.draw.line(screen, DOT_GRAY, (p_x+20, p_y+int(220*SCALE)), (p_x+p_w-20, p_y+int(220*SCALE)), 1)
+        pygame.draw.line(screen, DOT_GRAY, (p_x+20, p_y+int(250*SCALE)), (p_x+p_w-20, p_y+int(250*SCALE)), 1)
         
-        draw_text(screen, fonts['std'], "Stage Tuning (Hold SHIFT for Time)", YELLOW, (p_x + int(20*SCALE), p_y + int(240*SCALE)))
+        draw_text(screen, fonts['std'], "Stage Tuning (Hold SHIFT for Time)", YELLOW, (p_x + int(20*SCALE), p_y + int(270*SCALE)))
         
-        draw_row("Workers / Latency", ["[", "]"], int(270*SCALE))
-        draw_row("Batch Size / Window", ["-", "="], int(310*SCALE))
-        draw_row("TTL / Refresh", ["6", "7"], int(350*SCALE))
-        draw_row("Usable Keyspace", ["9", "0"], int(390*SCALE))
-        draw_row("Save / Load (Menu)", ["^S", "^L"], int(430*SCALE))
-        draw_row("Snapshot (Quick)", ["F5", "F6"], int(470*SCALE))
+        draw_row("Workers / Latency", ["[", "]"], int(300*SCALE))
+        draw_row("Batch Size / Window", ["-", "="], int(340*SCALE))
+        draw_row("TTL / Refresh", ["6", "7"], int(380*SCALE))
+        draw_row("Usable Keyspace", ["9", "0"], int(420*SCALE))
+        draw_row("Save / Load (Menu)", ["^S", "^L"], int(460*SCALE))
+        draw_row("Snapshot (Quick)", ["F5", "F6"], int(500*SCALE))
 
     else:
             screen.blit(fonts['std'].render("[H] Controls", True, MUTED), (int(30*SCALE), int(80*SCALE)))

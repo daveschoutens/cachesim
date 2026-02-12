@@ -131,6 +131,7 @@ def main():
                 is_shift = (mods & pygame.KMOD_SHIFT)
 
                 if event.key == pygame.K_h: show_help = not show_help
+                if event.key == pygame.K_ESCAPE or event.key == pygame.K_q: running = False
                 
                 # --- GLOBAL CONTROLS ---
                 if event.key == pygame.K_UP: sim.current_rps += 1
@@ -143,8 +144,19 @@ def main():
                 if event.key == pygame.K_l: sim.compute_speed = round(sim.compute_speed + 0.1, 1)
                 
                 if event.key == pygame.K_s: sim.saturation_enabled = not sim.saturation_enabled
-                if is_shift and event.key == pygame.K_d:  pass 
+                if is_shift and event.key == pygame.K_d: 
+                    sim.active_lane_count = (sim.active_lane_count % MAX_LANES) + 1
                 
+                if event.key == pygame.K_a:
+                     if sim.num_stages < MAX_STAGES:
+                        sim._create_stages(sim.num_stages + 1)
+                        sim.reset(); flash_msg = "Added Stage"; flash_timer = 1.0
+
+                if event.key == pygame.K_z:
+                     if sim.num_stages > 1:
+                        sim._create_stages(sim.num_stages - 1)
+                        sim.reset(); flash_msg = "Removed Stage"; flash_timer = 1.0
+
                 if event.key == pygame.K_r: sim.reset(); flash_msg = "Reset"; flash_timer = 1.0
                 if event.key == pygame.K_x: 
                      for s in sim.stages: s.load_history.clear()
