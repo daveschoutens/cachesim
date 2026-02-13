@@ -136,16 +136,20 @@ class Simulation:
 
         # Spawn
         self.spawn_timer += dt
-        if self.current_rps > 0 and self.spawn_timer >= 1.0 / self.current_rps:
-            self.requests.append(Request(self.sim_time, lane_idx=self.next_lane_rr % self.active_lane_count, key_limit=self.active_key_limit))
-            self.next_lane_rr = (self.next_lane_rr + 1) % self.active_lane_count
-            self.spawn_timer = 0
+        if self.current_rps > 0:
+            spawn_interval = 1.0 / self.current_rps
+            while self.spawn_timer >= spawn_interval:
+                self.requests.append(Request(self.sim_time, lane_idx=self.next_lane_rr % self.active_lane_count, key_limit=self.active_key_limit))
+                self.next_lane_rr = (self.next_lane_rr + 1) % self.active_lane_count
+                self.spawn_timer -= spawn_interval
 
         # Drag
         drag_factor = 1.0
         if self.saturation_enabled:
             active_count = len(self.requests)
-            drag_factor = 1.0 + (active_count * 0.005)
+            # Distribute load across active lanes to approximate per-lane saturation
+            count_per_lane = active_count / max(1, self.active_lane_count)
+            drag_factor = 1.0 + (count_per_lane * self.drag_coeff)
 
         # Update Stages
         for stage in self.stages:

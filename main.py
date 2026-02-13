@@ -132,6 +132,7 @@ def main():
 
                 if event.key == pygame.K_h: show_help = not show_help
                 if event.key == pygame.K_ESCAPE or event.key == pygame.K_q: running = False
+                if event.key == pygame.K_SPACE: sim.paused = not sim.paused
                 
                 # --- GLOBAL CONTROLS ---
                 if event.key == pygame.K_UP: sim.current_rps += 1

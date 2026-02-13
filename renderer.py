@@ -128,7 +128,7 @@ def draw_sim(screen, sim, fonts, show_help, ui_mode, input_text, file_list, sele
     # Saturation Indicator
     sat_color = RED if sim.saturation_enabled else DOT_GRAY
     active_count = len(sim.requests)
-    current_drag_factor = 1.0 + (active_count * 0.005) if sim.saturation_enabled else 1.0
+    current_drag_factor = 1.0 + ((active_count / max(1, sim.active_lane_count)) * 0.005) if sim.saturation_enabled else 1.0
     sat_text = f"Drag: {int((current_drag_factor-1.0)*100)}% (Sev:{sim.drag_coeff:.3f})" if sim.saturation_enabled else "Drag: OFF"
     draw_text(screen, fonts['big'], sat_text, sat_color, (int(680*SCALE), int(20*SCALE)))
 
@@ -429,7 +429,7 @@ def draw_sim(screen, sim, fonts, show_help, ui_mode, input_text, file_list, sele
 
         draw_text(screen, fonts['title'], "CONTROLS (Press H to Hide)", HIGHLIGHT, (p_x + int(20*SCALE), p_y + int(20*SCALE)))
         
-        draw_row("Global Load / Speed", ["UP", "DN", "LF", "RT"], int(60*SCALE))
+        draw_row("Global Load / Speed", ["Space", "UP", "DN", "LF", "RT"], int(60*SCALE))
 
         draw_row("Comp / Sat / Lane", ["K", "L", "S", "Shift+D"], int(100*SCALE))
         draw_row("Stage (Sel / + / -)", ["TAB", "A", "Z"], int(140*SCALE))

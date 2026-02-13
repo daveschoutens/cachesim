@@ -16,7 +16,8 @@ class Request:
         if is_ghost:
             self.state = 'diverting' 
             self.x = ghost_stage.x_trigger
-            self.y = HIGHWAY_Y + (int(15 * SCALE) * ghost_stage.y_offset_dir)
+            base_y = HIGHWAY_Y if lane_idx == 0 else HIGHWAY_Y + LANE_SPACING
+            self.y = base_y + (int(15 * SCALE) * ghost_stage.y_offset_dir)
             self.keys = [ghost_key] * MAX_STAGES 
             self.stage_idx = ghost_stage.index
             self.base_speed = 7.5 * SCALE 
@@ -173,14 +174,21 @@ class Stage:
              self.load_history.append(pct)
 
         # 3. WORKER ASSIGNMENT (Unified & Shared)
-        if self.worker_queue:
+        while self.worker_queue:
             # WORKER SERVE: Simple FIFO. L2 filtering happened upstream.
-            free_workers = [w for w in self.workers if w.busy_until < sim_time and len(w.current_reqs) == 0]
-            if free_workers:
-                worker = free_workers[0]
+            # Find a free worker
+            free_worker = None
+            for w in self.workers:
+                if w.busy_until < sim_time and len(w.current_reqs) == 0:
+                    free_worker = w
+                    break
+            
+            if free_worker:
                 unit_of_work = self.worker_queue.popleft()
                 
                 latency = self.work_time + (0.05 * len(unit_of_work))
-                worker.busy_until = sim_time + latency
-                worker.current_reqs = unit_of_work
+                free_worker.busy_until = sim_time + latency
+                free_worker.current_reqs = unit_of_work
                 for r in unit_of_work: r.state = 'processing'
+            else:
+                break
